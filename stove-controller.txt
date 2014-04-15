@@ -1,0 +1,325 @@
+//Arduino-Wood-Stove-Controller
+//=============================
+// stove ver 108
+#include <Adafruit_MAX31855.h>
+#include <LiquidCrystal.h>
+#include <Servo.h>
+#include <PID_v1.h>
+
+// define integers
+int x = 0;
+int setBeepBuzzer= 1;
+int muteBuzzer = LOW;
+int overTemp = LOW;
+int stoveMode = HIGH;
+int stoveShutdown = LOW;
+double stoveRunTemp = 500;
+int overtempSetPoint = 600;
+int servoPos = 15;
+int roomTempSetPoint = 72;
+int minStoveDamperSetting = 45;
+int stoveShutdownSetting = 31;
+double fdiff = 0;
+double insideTemp = 70;
+double f = 0;
+int fInt = f;
+int cfg = 0;
+double Output;
+double fnew;
+const int pulseWidthMin = 500;
+const int pulseWidthMax = 2100;
+int stoveRunTempInt = stoveRunTemp;
+
+// define pin constants
+const int buttonMutePin = 2;
+const int thermoCLK = 3;
+const int thermoCS = 4;
+const int thermoDO = 5;
+const int buttonStoveTempSetPointUp = 6;
+const int buttonStoveTempSetPointDown = 18;
+const int lcd1 = 7;
+const int lcd2 = 8;
+const int lcd3 = 9;
+const int lcd4 = 10;
+const int lcd5 = 11;
+const int lcd6 = 12;
+const int buzzerPin = 15;
+const int servoPin = 14;
+const int buttonRoomTempSetPointUp = 16;
+const int buttonRoomTempSetPointDown = 17;
+
+Servo myservo;
+Adafruit_MAX31855 thermocouple(thermoCLK, thermoCS, thermoDO);
+LiquidCrystal lcd(lcd1, lcd2, lcd3, lcd4, lcd5, lcd6);
+PID myPID(&f, &Output, &stoveRunTemp, 4, .2, 1, DIRECT);
+
+void setup() {
+myservo.attach(servoPin, pulseWidthMin, pulseWidthMax);
+pinMode(buzzerPin, OUTPUT);
+pinMode(buttonRoomTempSetPointUp, INPUT);
+pinMode(buttonRoomTempSetPointDown, INPUT);
+pinMode(buttonMutePin, INPUT);
+pinMode(buttonStoveTempSetPointUp, INPUT);
+pinMode(buttonStoveTempSetPointDown, INPUT);
+Serial.begin(9600);
+lcd.begin(16, 2);
+myservo.write(180);
+myPID.SetOutputLimits(minStoveDamperSetting, 180);
+myPID.SetMode(AUTOMATIC);
+// 1234567890123456
+lcd.print("Stove Control 8");
+lcd.setCursor(0, 1);
+// 1234567890123456
+lcd.print("by Mike O'Neill");
+// wait for MAX chip to stabilize
+delay(1000);
+}
+
+void loop() {
+
+// read thermocouple and subtract internal heat from lcd and interface board
+insideTemp = (thermocouple.readInternal() * 9 / 5 + 29);
+fnew = thermocouple.readFarenheit();
+while (isnan(fnew)) {
+fnew = thermocouple.readFarenheit();
+lcd.print("T/C Problem");
+}
+fdiff = fnew - f;
+f = fnew;
+fInt = f;
+
+// Compute PID
+myPID.Compute();
+
+//****************************************************
+// Damper control section
+// servoPos = 0 then damper is closed
+// servoPos = 180 then damper is fully opened
+
+if (!stoveShutdown && f <= insideTemp + 10) { // close the damper if the fire is out
+stoveShutdown = HIGH;
+}
+if (stoveShutdown && f >= insideTemp +20) { // open the damper when the fire is started
+stoveShutdown = LOW;
+}
+if (insideTemp <= roomTempSetPoint-.25) {
+stoveMode = HIGH;
+}
+if (insideTemp >= roomTempSetPoint+.25 || overTemp == HIGH) {
+stoveMode = LOW;
+}
+if (stoveShutdown) {
+myservo.write(stoveShutdownSetting);
+}
+else {
+if (stoveMode) {
+myservo.write(Output);
+}
+else
+{
+myservo.write(minStoveDamperSetting);
+}
+}
+
+// input loop for 5 seconds
+for (int y = 0; y < 50; y++) {
+
+// read mute button
+if (muteBuzzer == LOW) {
+muteBuzzer = digitalRead(buttonMutePin);
+}
+
+// buzzer overtemp alarm section
+if (muteBuzzer) {
+if (f < overtempSetPoint) { //resets the mute buzzer variable if the stove temp goes below the set temp
+muteBuzzer = LOW;
+overTemp = LOW;
+}
+digitalWrite(buzzerPin, LOW);
+}
+else
+{
+if (f > overtempSetPoint) {
+digitalWrite(buzzerPin, HIGH);
+overTemp = HIGH;
+}
+else
+{
+digitalWrite(buzzerPin, LOW);
+overTemp = LOW;
+}
+}
+
+// beep buzzer to remind to close damper
+if (setBeepBuzzer == 0 && fInt <=175) {
+setBeepBuzzer = 1;
+}
+if (setBeepBuzzer ==1 && fInt >=200) {
+for (int x = 0; x < 5; x++) {
+digitalWrite(buzzerPin, HIGH);
+delay (100);
+digitalWrite(buzzerPin, LOW);
+delay (500);
+}
+setBeepBuzzer = 2;
+}
+// beep buzzer to remind to close drawer
+if (setBeepBuzzer == 2 && fInt >=400) {
+for (int x = 0; x < 5; x++) {
+digitalWrite(buzzerPin, HIGH);
+delay (100);
+digitalWrite(buzzerPin, LOW);
+delay (500);
+}
+setBeepBuzzer = 0;
+}
+
+//Config section
+if (digitalRead(buttonRoomTempSetPointUp) && digitalRead(buttonRoomTempSetPointDown)) {
+cfg = 1;
+lcd.setCursor(0, 0);
+lcd.print("minStoveDamperSe");
+lcd.setCursor(0, 1);
+lcd.print(minStoveDamperSetting);
+lcd.print(" ");
+myservo.write(minStoveDamperSetting);
+delay (1000);
+while (cfg == 1) {
+while (digitalRead(buttonStoveTempSetPointUp)) {
+if (minStoveDamperSetting < 180) {
+minStoveDamperSetting = minStoveDamperSetting + 1;
+lcd.setCursor(0, 1);
+lcd.print(minStoveDamperSetting);
+lcd.print(" ");
+myservo.write(minStoveDamperSetting);
+delay (100);
+}
+}
+while (digitalRead(buttonStoveTempSetPointDown)) {
+if (minStoveDamperSetting > 0) {
+minStoveDamperSetting = minStoveDamperSetting - 1;
+lcd.setCursor(0, 1);
+lcd.print(minStoveDamperSetting);
+lcd.print(" ");
+myservo.write(minStoveDamperSetting);
+delay (100);
+}
+}
+if (digitalRead(buttonRoomTempSetPointUp) && digitalRead(buttonRoomTempSetPointDown)) {
+cfg = 2;
+}
+}
+lcd.setCursor(0, 0);
+lcd.print("stoveShutdownSet");
+lcd.setCursor(0, 1);
+lcd.print(stoveShutdownSetting);
+lcd.print(" ");
+myservo.write(stoveShutdownSetting);
+delay (1000);
+while (cfg == 2) {
+while (digitalRead(buttonStoveTempSetPointUp)) {
+if (stoveShutdownSetting < minStoveDamperSetting ) {
+stoveShutdownSetting = stoveShutdownSetting + 1;
+lcd.setCursor(0, 1);
+lcd.print(stoveShutdownSetting);
+lcd.print(" ");
+myservo.write(stoveShutdownSetting);
+delay (100);
+}
+}
+while (digitalRead(buttonStoveTempSetPointDown)) {
+if (stoveShutdownSetting > 0) {
+stoveShutdownSetting = stoveShutdownSetting - 1;
+lcd.setCursor(0, 1);
+lcd.print(stoveShutdownSetting);
+lcd.print(" ");
+myservo.write(stoveShutdownSetting);
+delay (100);
+}
+}
+if (digitalRead(buttonRoomTempSetPointUp) && digitalRead(buttonRoomTempSetPointDown)) {
+cfg = 0;
+}
+}
+}
+
+//Setting the room temperature
+while (digitalRead(buttonRoomTempSetPointUp)) {
+roomTempSetPoint = roomTempSetPoint + 1;
+if (roomTempSetPoint == 81) {
+roomTempSetPoint = 80;
+}
+lcd.setCursor(13, 1);
+lcd.print(roomTempSetPoint);
+delay (500);
+}
+while (digitalRead(buttonRoomTempSetPointDown)) {
+roomTempSetPoint = roomTempSetPoint -1;
+if (roomTempSetPoint == 64) {
+roomTempSetPoint = 65;
+}
+lcd.setCursor(13, 1);
+lcd.print(roomTempSetPoint);
+delay (500);
+}
+
+// Setting the stove temperature
+while (digitalRead(buttonStoveTempSetPointUp)) {
+stoveRunTemp = stoveRunTemp + 25;
+if (stoveRunTemp == 725) {
+stoveRunTemp = 700;
+}
+overtempSetPoint = 100 + stoveRunTemp;
+stoveRunTempInt = stoveRunTemp;
+lcd.setCursor(0, 1);
+lcd.print(stoveRunTempInt);
+delay (500);
+}
+while (digitalRead(buttonStoveTempSetPointDown)) {
+stoveRunTemp = stoveRunTemp - 25;
+if (stoveRunTemp == 175) {
+stoveRunTemp = 200;
+}
+overtempSetPoint = 100 + stoveRunTemp;
+stoveRunTempInt = stoveRunTemp;
+lcd.setCursor(0, 1);
+lcd.print(stoveRunTempInt);
+delay (500);
+}
+
+delay (100);
+}
+
+
+//****************************************************
+// DISPLAY SECTION
+// First Line
+// Print stove probe temperature / servo position / stove run temp
+servoPos = Output;
+lcd.setCursor(0, 0);
+lcd.print(fInt);
+lcd.print("F ");
+lcd.setCursor(5, 0);
+lcd.print(servoPos);
+
+lcd.print(" ");
+lcd.setCursor(10, 0);
+lcd.print(insideTemp);
+lcd.print("F");
+
+// Second Line
+// print the room temperature set point / over temp setting / room temperature
+lcd.setCursor(0, 1);
+lcd.print(stoveRunTempInt);
+lcd.print("F ");
+lcd.setCursor(5, 1);
+lcd.print(fdiff);
+lcd.print("F ");
+lcd.setCursor(13, 1);
+lcd.print(roomTempSetPoint);
+lcd.print("F");
+
+// Serial Output Debugging
+// Serial.print(f); Serial.print(" "); Serial.print(stoveRunTemp); Serial.print(" "); Serial.print(overtempSetPoint); Serial.print(" "); Serial.print(servoPos); Serial.print(" "); Serial.print(fdiff); Serial.print(" "); Serial.print(roomTempSetPoint); Serial.print(" "); Serial.println(insideTemp);
+
+} 
